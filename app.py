@@ -4,25 +4,23 @@ import json
 import math
 
 # ─────────────────────────────────────────────
-# HELPER : RADAR CHART (défini en premier)
+# HELPER : RADAR CHART
 # ─────────────────────────────────────────────
 def _render_radar(scores_detail: dict, key: str = ""):
-    """Affiche un mini radar chart des 3 critères d'évaluation."""
     try:
         import matplotlib.pyplot as plt
         import numpy as np
 
-        labels     = list(scores_detail.keys())
-        vals       = [float(scores_detail[k]) for k in labels]
-        N          = len(labels)
-        angles     = [n / float(N) * 2 * math.pi for n in range(N)]
-        angles    += angles[:1]
-        vals_plot  = vals + vals[:1]
+        labels    = list(scores_detail.keys())
+        vals      = [float(scores_detail[k]) for k in labels]
+        N         = len(labels)
+        angles    = [n / float(N) * 2 * math.pi for n in range(N)]
+        angles   += angles[:1]
+        vals_plot = vals + vals[:1]
 
         fig, ax = plt.subplots(figsize=(2.8, 2.8), subplot_kw=dict(polar=True))
         ax.set_facecolor("#0f172a")
         fig.patch.set_facecolor("#0f172a")
-
         ax.plot(angles, vals_plot, color="#818cf8", linewidth=2)
         ax.fill(angles, vals_plot, color="#818cf8", alpha=0.25)
         ax.set_xticks(angles[:-1])
@@ -35,9 +33,7 @@ def _render_radar(scores_detail: dict, key: str = ""):
 
         st.pyplot(fig, use_container_width=False)
         plt.close(fig)
-
     except ImportError:
-        # Fallback texte si matplotlib absent
         for k, v in scores_detail.items():
             bar = "█" * int(v) + "░" * (10 - int(v))
             st.caption(f"{k.capitalize()}: {bar} {v}/10")
@@ -47,23 +43,23 @@ def _render_radar(scores_detail: dict, key: str = ""):
 # CONFIG PAGE
 # ─────────────────────────────────────────────
 st.set_page_config(page_title="VibeGuard IA", page_icon="🛡️", layout="wide")
-
 st.title("🛡️ VibeGuard : Sécurisez votre 'Vibe Coding'")
 st.subheader("Passez du prototype à l'application robuste sans toucher au code.")
 
 # ─────────────────────────────────────────────
 # SESSION STATE
 # ─────────────────────────────────────────────
-for _key, _default in [
+for _k, _v in [
     ("tests",      None),
     ("results",    {}),
     ("tips",       None),
     ("ambiguity",  None),
+    ("agent_info", None),   # ← type d'agent détecté + critères
     ("history",    []),
     ("vibe_desc",  ""),
 ]:
-    if _key not in st.session_state:
-        st.session_state[_key] = _default
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
 
 # ─────────────────────────────────────────────
 # SIDEBAR
@@ -77,7 +73,7 @@ with st.sidebar:
         height=150
     )
 
-    # ── Vérification ambiguïté ──
+    # Vérification ambiguïté
     if st.button("🔍 Vérifier la description", use_container_width=True):
         if vibe_desc.strip():
             with st.spinner("Analyse des ambiguïtés..."):
@@ -100,22 +96,23 @@ with st.sidebar:
 
     st.divider()
 
-    # ── Génération des tests ──
+    # Génération (tests + type d'agent en parallèle)
     if st.button("🚀 Générer le Banc d'Essai", use_container_width=True, type="primary"):
         if vibe_desc.strip():
-            with st.spinner("Mistral génère vos scénarios de test..."):
-                response = engine.generate_test_suite(vibe_desc)
-                st.session_state.tests     = response.get("scenarios", [])
-                st.session_state.results   = {}
-                st.session_state.tips      = None
-                st.session_state.vibe_desc = vibe_desc
+            with st.spinner("Génération des tests et analyse du type d'agent..."):
+                scenarios, agent_info = engine.generate_test_suite_and_detect(vibe_desc)
+                st.session_state.tests      = scenarios
+                st.session_state.agent_info = agent_info
+                st.session_state.results    = {}
+                st.session_state.tips       = None
+                st.session_state.vibe_desc  = vibe_desc
                 for j in range(10):
                     st.session_state.pop(f"resp_{j}", None)
-            st.success(f"✅ {len(st.session_state.tests)} tests générés !")
+            st.success(f"✅ {len(scenarios)} tests générés !")
         else:
             st.warning("Entrez une description d'abord.")
 
-    # ── Historique ──
+    # Historique
     if st.session_state.history:
         st.divider()
         st.markdown("### 📜 Historique des runs")
@@ -129,13 +126,46 @@ with st.sidebar:
 
 
 # ─────────────────────────────────────────────
+# BADGE TYPE D'AGENT
+# ─────────────────────────────────────────────
+TYPE_ICONS = {
+    "classification": "🏷️",
+    "recommandation": "💡",
+    "support_client": "🎧",
+    "generation":     "✍️",
+    "extraction":     "🔎",
+    "conversation":   "💬",
+    "workflow":       "⚙️",
+}
+
+if st.session_state.tests and st.session_state.agent_info:
+    ai = st.session_state.agent_info
+    type_key  = ai.get("type_agent", "")
+    label     = ai.get("label_affichage", type_key)
+    icon      = TYPE_ICONS.get(type_key, "🤖")
+    explication = ai.get("explication", "")
+    criteres    = ai.get("criteres_evaluation", [])
+
+    with st.container():
+        st.markdown(f"### {icon} Type d'agent détecté : **{label}**")
+        st.caption(explication)
+        if criteres:
+            cols = st.columns(len(criteres))
+            for col, c in zip(cols, criteres):
+                col.info(f"**{c['nom'].replace('_',' ').capitalize()}**\n\n{c['description']}")
+    st.divider()
+
+
+# ─────────────────────────────────────────────
 # ÉTAPE 2 : BANC D'ESSAI
 # ─────────────────────────────────────────────
 if st.session_state.tests:
-    tests = st.session_state.tests
+    tests      = st.session_state.tests
+    agent_info = st.session_state.agent_info
+
     st.header("🧪 Banc d'Essai Automatique")
 
-    # ── Bouton "Tout évaluer en parallèle" ──
+    # Bouton "Tout évaluer en parallèle"
     all_filled = all(
         bool(st.session_state.get(f"resp_{i}", "").strip())
         for i in range(len(tests))
@@ -145,7 +175,7 @@ if st.session_state.tests:
         if st.button("⚡ Évaluer TOUS les tests en parallèle", type="primary", use_container_width=True):
             with st.spinner("Évaluation parallèle des 3 tests simultanément..."):
                 responses   = {i: st.session_state.get(f"resp_{i}", "") for i in range(len(tests))}
-                new_results = engine.evaluate_all_parallel(tests, responses)
+                new_results = engine.evaluate_all_parallel(tests, responses, agent_info=agent_info)
                 st.session_state.results.update(new_results)
             st.rerun()
     else:
@@ -153,7 +183,7 @@ if st.session_state.tests:
 
     st.divider()
 
-    # ── Tests individuels ──
+    # Tests individuels
     for i, test in enumerate(tests):
         badge = {"NOMINAL": "🟦", "LIMITE": "🟨", "CRITIQUE": "🟥"}.get(test.get("type", ""), "⬜")
         with st.expander(f"{badge} Test #{i+1} : {test['nom']} ({test.get('type', '')})", expanded=True):
@@ -165,7 +195,6 @@ if st.session_state.tests:
                 st.write(f"**Attendu :** {test['attendu']}")
 
             with col2:
-                # ── Simulation ──
                 st.markdown("##### 🎭 Simulation de réponse")
                 sim_col1, sim_col2 = st.columns([2, 1])
 
@@ -177,10 +206,8 @@ if st.session_state.tests:
                                  "🚀 Agent Robuste (parfait)"],
                         key=f"sim_{i}"
                     )
-
                 with sim_col2:
-                    st.write("")
-                    st.write("")
+                    st.write(""); st.write("")
                     if st.button("⚡ Générer", key=f"sim_btn_{i}", use_container_width=True):
                         if "Nul" in simulation_choice:
                             with st.spinner("Simulation agent nul..."):
@@ -197,24 +224,22 @@ if st.session_state.tests:
                         else:
                             st.warning("Choisissez un type de simulation d'abord.")
 
-                # ── Zone de réponse ──
                 agent_resp = st.text_area(
                     f"Réponse de votre Agent (#{i+1})",
                     key=f"resp_{i}",
                     help="Collez la réponse de votre agent ici, ou utilisez la simulation."
                 )
 
-                # ── Évaluation individuelle ──
                 if st.button(f"🔎 Évaluer Test #{i+1}", key=f"btn_{i}"):
                     if agent_resp.strip():
                         with st.spinner("Le Juge analyse..."):
-                            res = engine.evaluate_run(test, agent_resp)
+                            res = engine.evaluate_run(test, agent_resp, agent_info=agent_info)
                             st.session_state.results[i] = res
                         st.rerun()
                     else:
                         st.warning("Entrez une réponse avant d'évaluer.")
 
-                # ── Résultat ──
+                # Résultat
                 if i in st.session_state.results:
                     result    = st.session_state.results[i]
                     status    = result.get("status", "—")
@@ -231,18 +256,15 @@ if st.session_state.tests:
 
                     st.write(f"**Feedback :** {feedback}")
 
-                    # Points faibles
                     if points:
                         st.markdown("**⚠️ Points faibles détectés :**")
                         for pt in points:
                             st.caption(f"  • {pt}")
 
-                    # Confiance du juge
                     if confiance:
                         conf_icon = {"Élevée": "🟢", "Moyenne": "🟡", "Faible": "🔴"}.get(confiance, "⚪")
                         st.caption(f"🧑‍⚖️ Confiance du juge : {conf_icon} {confiance}")
 
-                    # Radar chart
                     if scores_d:
                         st.markdown("**📊 Détail des critères :**")
                         _render_radar(scores_d, key=f"radar_{i}")
@@ -266,15 +288,10 @@ if st.session_state.tests and len(st.session_state.results) == len(st.session_st
     g3.metric("Verdict",          verdict)
     st.progress(pct / 100)
 
-    # Sauvegarde historique (évite doublons consécutifs)
-    current_run = {
-        "vibe":   st.session_state.vibe_desc[:40],
-        "passed": passed, "total": total, "pct": pct
-    }
+    current_run = {"vibe": st.session_state.vibe_desc[:40], "passed": passed, "total": total, "pct": pct}
     if not st.session_state.history or st.session_state.history[-1] != current_run:
         st.session_state.history.append(current_run)
 
-    # ── Amélioration + Export ──
     st.divider()
     st.header("📈 Rapport d'Amélioration")
 
@@ -289,7 +306,10 @@ if st.session_state.tests and len(st.session_state.results) == len(st.session_st
                      for i, r in results.items()},
                     ensure_ascii=False
                 )
-                tips = engine.get_improvement_tips(st.session_state.vibe_desc, summary)
+                tips = engine.get_improvement_tips(
+                    st.session_state.vibe_desc, summary,
+                    agent_info=st.session_state.agent_info
+                )
                 st.session_state.tips = tips
 
     if st.session_state.tips:
@@ -307,6 +327,7 @@ if st.session_state.tests and len(st.session_state.results) == len(st.session_st
                     st.session_state.vibe_desc,
                     st.session_state.tests,
                     st.session_state.results,
+                    agent_info=st.session_state.agent_info,
                     tips=st.session_state.tips
                 )
             if pdf_bytes:
@@ -318,4 +339,4 @@ if st.session_state.tests and len(st.session_state.results) == len(st.session_st
                     use_container_width=True
                 )
             else:
-                st.error("ReportLab non installé. Lancez : pip install reportlab --break-system-packages")
+                st.error("ReportLab non installé : pip install reportlab")

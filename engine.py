@@ -4,8 +4,8 @@ from mistralai.client import Mistral
 import prompts
 
 MISTRAL_API_KEY = "lYkXVRLEFedkp2CL5ycuRWcZiqtwo3Ms"
-MODEL_NAME = "mistral-large-latest"   # Génération, évaluation, conseils (précision max)
-MODEL_FAST = "mistral-small-latest"   # Simulation + ambiguïté (vitesse)
+MODEL_NAME = "mistral-large-latest"   # Génération, évaluation, conseils
+MODEL_FAST = "mistral-small-latest"   # Simulation, ambiguïté, détection type
 
 client = Mistral(api_key=MISTRAL_API_KEY)
 
@@ -49,11 +49,11 @@ def call_mistral_text(system_prompt, user_content, model=None, max_tokens=400):
         return f"Erreur lors de la simulation : {str(e)}"
 
 # ─────────────────────────────────────────────
-# ÉTAPE 0 : DÉTECTION D'AMBIGUÏTÉS (rapide, small)
+# ÉTAPE 0a : DÉTECTION D'AMBIGUÏTÉS
 # ─────────────────────────────────────────────
 
 def check_ambiguity(vibe_description):
-    """Analyse la description pour détecter les zones floues avant génération des tests."""
+    """Analyse la description pour détecter les zones floues."""
     return call_mistral(
         prompts.SYSTEM_AMBIGUITY,
         f"Description de l'agent : {vibe_description}",
@@ -62,40 +62,83 @@ def check_ambiguity(vibe_description):
     )
 
 # ─────────────────────────────────────────────
-# ÉTAPE 1 : GÉNÉRATION DES TESTS
+# ÉTAPE 0b : DÉTECTION DU TYPE D'AGENT
 # ─────────────────────────────────────────────
 
-def generate_test_suite(vibe_description):
-    """Génère les scénarios de test à partir de la description métier."""
+def detect_agent_type(vibe_description):
+    """
+    Détecte le type d'agent et retourne les critères d'évaluation adaptés.
+    Tourne en parallèle avec generate_test_suite() → zéro surcoût.
+    """
     return call_mistral(
-        prompts.SYSTEM_GENERATOR,
-        prompts.get_generation_prompt(vibe_description),
-        max_tokens=1200
+        prompts.SYSTEM_AGENT_DETECTOR,
+        f"Description de l'agent : {vibe_description}",
+        model=MODEL_FAST,
+        max_tokens=512
     )
 
 # ─────────────────────────────────────────────
-# ÉTAPE 2 : ÉVALUATION (unitaire + parallèle)
+# ÉTAPE 1 : GÉNÉRATION DES TESTS + DÉTECTION TYPE EN PARALLÈLE
 # ─────────────────────────────────────────────
 
-def evaluate_run(test_scenario, agent_response):
-    """Évalue UN test — appelé unitairement depuis l'UI."""
+def generate_test_suite_and_detect(vibe_description):
+    """
+    Lance en parallèle :
+    - La génération des scénarios de test
+    - La détection du type d'agent
+    Retourne (scenarios_list, agent_type_dict)
+    Gain de temps : les deux appels se font simultanément.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f_tests = executor.submit(
+            call_mistral,
+            prompts.SYSTEM_GENERATOR,
+            prompts.get_generation_prompt(vibe_description),
+            None,   # model = large par défaut
+            1200
+        )
+        f_type = executor.submit(detect_agent_type, vibe_description)
+
+        tests_response = f_tests.result()
+        type_response  = f_type.result()
+
+    scenarios  = tests_response.get("scenarios", [])
+    agent_info = type_response if "error" not in type_response else None
+
+    return scenarios, agent_info
+
+# ─────────────────────────────────────────────
+# ÉTAPE 2 : ÉVALUATION ADAPTÉE AU TYPE
+# ─────────────────────────────────────────────
+
+def evaluate_run(test_scenario, agent_response, agent_info=None):
+    """
+    Évalue UN test avec des critères adaptés au type d'agent détecté.
+    Si agent_info est None, utilise le juge générique par défaut.
+    """
+    # Construit le system prompt du juge selon le type d'agent
+    if agent_info and "criteres_evaluation" in agent_info:
+        system_judge = prompts.build_system_judge(agent_info["criteres_evaluation"])
+    else:
+        system_judge = prompts.SYSTEM_JUDGE_DEFAULT
+
     user_input = prompts.get_judge_prompt(
-        test_scenario['contexte'],
-        test_scenario['attendu'],
+        test_scenario["contexte"],
+        test_scenario["attendu"],
         agent_response
     )
-    return call_mistral(prompts.SYSTEM_JUDGE, user_input, max_tokens=512)
+    return call_mistral(system_judge, user_input, max_tokens=512)
 
-def evaluate_all_parallel(tests, responses: dict):
+def evaluate_all_parallel(tests, responses: dict, agent_info=None):
     """
-    Évalue TOUS les tests en parallèle (ThreadPoolExecutor).
+    Évalue TOUS les tests en parallèle avec le juge adapté au type d'agent.
     responses = {index: texte_reponse}
     Retourne {index: result_dict}
     """
     results = {}
 
     def _eval(i):
-        return i, evaluate_run(tests[i], responses[i])
+        return i, evaluate_run(tests[i], responses[i], agent_info=agent_info)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         futures = {executor.submit(_eval, i): i for i in responses}
@@ -109,9 +152,12 @@ def evaluate_all_parallel(tests, responses: dict):
 # ÉTAPE 3 : CONSEILS D'AMÉLIORATION
 # ─────────────────────────────────────────────
 
-def get_improvement_tips(vibe_description, failed_tests_summary):
+def get_improvement_tips(vibe_description, failed_tests_summary, agent_info=None):
     """Propose des corrections basées sur les résultats des tests."""
-    user_input = f"Vibe initiale : {vibe_description}\nRésumé des résultats : {failed_tests_summary}"
+    type_ctx = ""
+    if agent_info:
+        type_ctx = f"Type d'agent : {agent_info.get('label_affichage', '')}\n"
+    user_input = f"{type_ctx}Vibe initiale : {vibe_description}\nRésumé des résultats : {failed_tests_summary}"
     return call_mistral(prompts.SYSTEM_ADVISOR, user_input, max_tokens=800)
 
 # ─────────────────────────────────────────────
@@ -120,7 +166,6 @@ def get_improvement_tips(vibe_description, failed_tests_summary):
 
 def simulate_agent_response(user_input, attendu, mode="robuste"):
     """
-    Simule la réponse d'un agent.
     mode='nul'     → réponse hors-sujet absurde
     mode='robuste' → réponse exemplaire couvrant tous les attendus
     """
@@ -133,19 +178,14 @@ def simulate_agent_response(user_input, attendu, mode="robuste"):
 # EXPORT PDF
 # ─────────────────────────────────────────────
 
-def build_pdf_report(vibe_desc, tests, results, tips=None):
-    """
-    Génère un rapport PDF en mémoire (bytes) avec ReportLab.
-    Retourne les bytes du PDF ou None si ReportLab absent.
-    """
+def build_pdf_report(vibe_desc, tests, results, agent_info=None, tips=None):
+    """Génère un rapport PDF en mémoire. Retourne les bytes ou None."""
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import cm
         from reportlab.lib import colors
-        from reportlab.platypus import (
-            SimpleDocTemplate, Paragraph, Spacer, HRFlowable
-        )
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
         from io import BytesIO
 
         buf = BytesIO()
@@ -165,6 +205,18 @@ def build_pdf_report(vibe_desc, tests, results, tips=None):
         story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#6366f1")))
         story.append(Spacer(1, 0.3*cm))
         story.append(Paragraph(f"<b>Description de l'agent :</b> {vibe_desc}", b_style))
+
+        # Type d'agent
+        if agent_info:
+            story.append(Paragraph(
+                f"<b>Type détecté :</b> {agent_info.get('label_affichage', '—')} "
+                f"— {agent_info.get('explication', '')}",
+                cap_style))
+            criteres = agent_info.get("criteres_evaluation", [])
+            if criteres:
+                criteres_str = ", ".join(c["nom"] for c in criteres)
+                story.append(Paragraph(f"<b>Critères d'évaluation :</b> {criteres_str}", cap_style))
+
         story.append(Spacer(1, 0.4*cm))
 
         # Score global
@@ -201,8 +253,7 @@ def build_pdf_report(vibe_desc, tests, results, tips=None):
                 story.append(Paragraph(
                     f"<b>Points faibles :</b> {' | '.join(points_faibles)}", cap_style))
             if scores_detail:
-                detail_str = "  ".join(
-                    [f"{k}: {v}/10" for k, v in scores_detail.items()])
+                detail_str = "  |  ".join(f"{k}: {v}/10" for k, v in scores_detail.items())
                 story.append(Paragraph(f"<b>Détail scores :</b> {detail_str}", cap_style))
             if confiance:
                 story.append(Paragraph(f"<b>Confiance du juge :</b> {confiance}", cap_style))
