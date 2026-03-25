@@ -42,9 +42,9 @@ def _render_radar(scores_detail: dict, key: str = ""):
 # ─────────────────────────────────────────────
 # CONFIG PAGE
 # ─────────────────────────────────────────────
-st.set_page_config(page_title="VibeGuard IA", page_icon="🛡️", layout="wide")
-st.title("🛡️ VibeGuard : Sécurisez votre 'Vibe Coding'")
-st.subheader("Passez du prototype à l'application robuste sans toucher au code.")
+st.set_page_config(page_title="Mady.AI", page_icon="🛡️", layout="wide")
+st.title("Mady.AI : Tester votre Agent IA !")
+st.subheader("Passez de l’intuition à l’agent robuste : testez, évaluez et améliorez vos agents.")
 
 # ─────────────────────────────────────────────
 # SESSION STATE
@@ -68,7 +68,7 @@ with st.sidebar:
     st.header("⚙️ Configuration")
 
     vibe_desc = st.text_area(
-        "Décrivez votre agent (votre 'vibe') :",
+        "Décrivez votre agent :",
         placeholder="Ex: Un bot qui aide les étudiants à trouver un stage en informatique...",
         height=150
     )
@@ -177,6 +177,19 @@ if st.session_state.tests:
                 responses   = {i: st.session_state.get(f"resp_{i}", "") for i in range(len(tests))}
                 new_results = engine.evaluate_all_parallel(tests, responses, agent_info=agent_info)
                 st.session_state.results.update(new_results)
+                # ✅ Mise à jour de l'historique après ÉVALUATION GLOBALE
+                passed = sum(1 for r in st.session_state.results.values() if r.get("status") == "SUCCESS")
+                total = len(st.session_state.results)
+                pct = int(passed / total * 100) if total else 0
+
+                current_run = {
+                    "vibe": st.session_state.vibe_desc[:40],
+                    "passed": passed,
+                    "total": total,
+                    "pct": pct
+                }
+
+                st.session_state.history.append(current_run)
             st.rerun()
     else:
         st.info("💡 Remplissez toutes les réponses pour activer l'évaluation groupée (3x plus rapide).")
@@ -287,11 +300,6 @@ if st.session_state.tests and len(st.session_state.results) == len(st.session_st
     g2.metric("Taux de réussite", f"{pct}%")
     g3.metric("Verdict",          verdict)
     st.progress(pct / 100)
-
-    current_run = {"vibe": st.session_state.vibe_desc[:40], "passed": passed, "total": total, "pct": pct}
-    if not st.session_state.history or st.session_state.history[-1] != current_run:
-        st.session_state.history.append(current_run)
-
     st.divider()
     st.header("📈 Rapport d'Amélioration")
 
@@ -318,7 +326,6 @@ if st.session_state.tests and len(st.session_state.results) == len(st.session_st
         for tip in tips.get("conseils", []):
             st.write(f"- {tip}")
         st.code(tips.get("nouveau_prompt_suggere", ""), language="markdown")
-        st.balloons()
 
     with export_col:
         if st.button("📄 Exporter le rapport PDF", use_container_width=True):
