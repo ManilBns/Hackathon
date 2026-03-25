@@ -226,7 +226,7 @@ def build_pdf_report(vibe_desc, tests, results, agent_info=None, tips=None):
                                    textColor=colors.grey, spaceAfter=2)
 
         story = []
-        story.append(Paragraph("VibeGuard — Rapport d'Évaluation", t_style))
+        story.append(Paragraph("Mady.IA — Rapport d'Évaluation", t_style))
         story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#6366f1")))
         story.append(Spacer(1, 0.3*cm))
         story.append(Paragraph(f"<b>Description de l'agent :</b> {vibe_desc}", b_style))

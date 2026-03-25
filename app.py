@@ -341,7 +341,7 @@ if st.session_state.tests and len(st.session_state.results) == len(st.session_st
                 st.download_button(
                     label="⬇️ Télécharger le rapport",
                     data=pdf_bytes,
-                    file_name="vibeguard_rapport.pdf",
+                    file_name="MadyIA_rapport.pdf",
                     mime="application/pdf",
                     use_container_width=True
                 )
