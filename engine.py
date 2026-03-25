@@ -153,12 +153,37 @@ def evaluate_all_parallel(tests, responses: dict, agent_info=None):
 # ─────────────────────────────────────────────
 
 def get_improvement_tips(vibe_description, failed_tests_summary, agent_info=None):
-    """Propose des corrections basées sur les résultats des tests."""
+    """Propose des corrections basées sur les résultats des tests, avec fallback."""
+    
     type_ctx = ""
     if agent_info:
         type_ctx = f"Type d'agent : {agent_info.get('label_affichage', '')}\n"
-    user_input = f"{type_ctx}Vibe initiale : {vibe_description}\nRésumé des résultats : {failed_tests_summary}"
-    return call_mistral(prompts.SYSTEM_ADVISOR, user_input, max_tokens=800)
+
+    user_input = (
+        f"{type_ctx}Vibe initiale : {vibe_description}\n"
+        f"Résumé des résultats : {failed_tests_summary}"
+    )
+
+    tips = call_mistral(prompts.SYSTEM_ADVISOR, user_input, max_tokens=800)
+
+    # ✅ Fallback 1 : dictionnaire vide
+    if not isinstance(tips, dict):
+        tips = {}
+
+    # ✅ Fallback 2 : aucun conseil renvoyé
+    if not tips.get("conseils"):
+        tips["conseils"] = [
+            "Ajoutez des exemples plus précis dans votre description afin que l'agent comprenne mieux les attentes.",
+            "Clarifiez les contraintes ou les règles de décision pour guider l'agent dans les situations ambiguës.",
+        ]
+
+    # ✅ Fallback 3 : aucun prompt suggéré
+    if not tips.get("nouveau_prompt_suggere"):
+        tips["nouveau_prompt_suggere"] = (
+            "Réécrivez votre description en ajoutant 2–3 exemples concrets, les contraintes clés, et le rôle exact de l’agent."
+        )
+
+    return tips
 
 # ─────────────────────────────────────────────
 # SIMULATION AGENT NUL / ROBUSTE
